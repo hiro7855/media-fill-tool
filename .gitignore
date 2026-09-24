@@ -1,0 +1,25 @@
+# 密钥与配置(务必不要提交)
+config.yaml
+
+# 运行时产出(含真实个人敏感信息)
+产出/
+产出/*
+
+# 真实输入资料(仅保留合成的示例活动)
+输入/*
+!输入/测试活动/
+!输入/测试活动/**
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

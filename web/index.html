@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>录录媒</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand"><span class="brand-emoji">📋</span>录录媒</div>
+      <button class="context-chip" id="activity-badge" title="回到「选活动」">未选择活动</button>
+      <button class="gear" id="btn-gear" title="设置" aria-label="设置">⚙</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 统领全局:emoji + 名字 + 简述(固定不动) -->
+    <section class="hero">
+      <div class="hero-emoji">📋</div>
+      <h1 class="hero-name">录录媒</h1>
+      <div class="hero-sub">MEDIA HELPER</div>
+      <p class="hero-desc">把媒体老师发来的参会回执、机票、高铁截图直接传进来,AI 自动识别姓名、职位、电话、身份证、收款信息和行程;核对无误后一键回填到飞书表格,告别逐项手敲。</p>
+    </section>
+
+    <!-- 三个步骤按钮:点按钮切换下半部分 -->
+    <nav class="part-nav" id="part-nav">
+      <button class="part-btn active" data-part="1"><span class="pn-idx">①</span>选活动</button>
+      <button class="part-btn" data-part="2"><span class="pn-idx">②</span>资料识别</button>
+      <button class="part-btn" data-part="3"><span class="pn-idx">③</span>回填飞书</button>
+    </nav>
+
+    <!-- ① 选活动 -->
+    <section class="step-panel active" id="part-1">
+      <div class="card">
+        <h2>选择或新建活动</h2>
+        <p class="sub">每场活动一个文件夹。在下面新建一个,或从历史记录里挑一个已建好的活动继续录入。</p>
+        <div class="btn-row" style="margin-top:0">
+          <input id="new-act-name" class="text-input" placeholder="新活动名称,如:2025春季发布会">
+          <button class="btn primary small" id="btn-create-act">新建活动</button>
+        </div>
+        <h3 class="section-title" style="margin-top:26px">活动历史</h3>
+        <p class="sub" style="margin-bottom:14px">这里是你建过的所有活动,点任意一行即可进入「资料识别」继续录入。</p>
+        <div id="act-table-wrap"></div>
+      </div>
+      <div class="step-nav">
+        <span></span>
+        <button class="btn primary" id="to-part-2" data-goto="2" disabled>下一步:资料识别 →</button>
+      </div>
+    </section>
+
+    <!-- ② 资料识别(上传 + 识别 + 核对 合并) -->
+    <section class="step-panel" id="part-2">
+      <div class="empty-guard" data-guard="2"></div>
+      <div class="step-body" data-body="2">
+        <div class="card">
+          <h2>上传资料</h2>
+          <p class="sub">把某位嘉宾的微信文本(.txt)和截图放到同一个「单元」里;一人一个单元,识别更准。</p>
+          <div class="field" style="max-width:320px"><label>单元名称(通常填这个人的名字)</label><input id="unit-name" placeholder="默认"></div>
+          <div class="dropzone" id="dropzone">
+            把文件拖到这里,或点击选择<br>
+            <span class="hint">支持 .txt / .md 文本,.png / .jpg / .jpeg / .webp 截图,单个 ≤20MB</span>
+          </div>
+          <input type="file" id="file-input" multiple accept=".txt,.md,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
+          <span class="status muted" id="st-upload"></span>
+          <div class="file-units" id="file-units"></div>
+        </div>
+
+        <div class="card">
+          <h2>识别与核对</h2>
+          <p class="sub">对当前活动的资料做识别,识别完在下面按人核对红黄标记。</p>
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn primary" id="btn-extract">开始识别</button>
+            <button class="btn small" id="btn-reload-records">刷新结果</button>
+            <span class="status muted" id="st-extract"></span>
+          </div>
+          <div class="progress-wrap" id="progress-wrap" style="display:none">
+            <div class="progress"><div class="bar" id="progress-bar"></div></div>
+            <div class="progress-label" id="progress-label"></div>
+            <details class="log-details">
+              <summary>查看识别详情</summary>
+              <div class="log" id="extract-log"></div>
+            </details>
+          </div>
+        </div>
+
+        <div class="card" id="review-card" style="display:none">
+          <div class="issue-bar" id="issue-bar"></div>
+          <div class="legend">
+            <span class="l-red">红色 = 格式可能有误(悬停看原因)</span>
+            <span class="l-yellow">黄色 = AI 不确定,请核对</span>
+          </div>
+          <div id="person-cards"></div>
+
+          <div id="trips-block" style="display:none">
+            <h3 class="section-title" style="margin-top:24px">待认领行程</h3>
+            <p class="sub">每张卡是一段还没配上人的行程,请用下拉把它认领给上面某位嘉宾。</p>
+            <div id="trip-cards"></div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn primary" id="btn-save-records">保存修改</button>
+            <span class="status muted" id="st-records"></span>
+          </div>
+        </div>
+      </div>
+      <div class="step-nav">
+        <button class="btn ghost" data-goto="1">← 选活动</button>
+        <button class="btn primary" data-goto="3">下一步:去回填 →</button>
+      </div>
+    </section>
+
+    <!-- ③ 回填飞书 -->
+    <section class="step-panel" id="part-3">
+      <div class="empty-guard" data-guard="3"></div>
+      <div class="step-body" data-body="3">
+        <div class="card">
+          <h2>回填到飞书</h2>
+          <p class="sub">先「试算预览」看清每个值落到哪一列,确认无误再写入目标表。</p>
+          <div class="btn-row" style="margin-top:0">
+            <button class="btn primary" id="btn-preview">试算预览</button>
+            <span class="status muted" id="st-apply"></span>
+          </div>
+        </div>
+
+        <div class="card" id="preview-card" style="display:none">
+          <h3 class="section-title">试算结果</h3>
+          <div id="preview-body"></div>
+          <div class="check-row" style="margin-top:16px">
+            <input type="checkbox" id="apply-force"><label for="apply-force" style="cursor:pointer">强制写入(即使这批已经写过)</label>
+          </div>
+          <div class="btn-row">
+            <button class="btn danger" id="btn-write">确认写入飞书</button>
+            <span class="status muted" id="st-write"></span>
+          </div>
+        </div>
+      </div>
+      <div class="step-nav">
+        <button class="btn ghost" data-goto="2">← 资料识别</button>
+        <span></span>
+      </div>
+    </section>
+  </main>
+
+  <!-- 设置浮层 -->
+  <div class="overlay" id="settings-overlay">
+    <div class="modal settings-modal">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button class="modal-close" id="btn-close-settings" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <section class="settings-group">
+          <h3>识别引擎</h3>
+          <p class="sub">连接公司内网的视觉模型,用于从截图和文本里提取信息。</p>
+          <div class="grid2">
+            <div class="field"><label>识别服务地址(base_url)</label><input id="relay-base" placeholder="https://..."></div>
+            <div class="field"><label>模型名</label><input id="relay-model" placeholder="claude-sonnet-5"></div>
+            <div class="field"><label>API Key(留空则不修改)</label><input id="relay-key" type="password" autocomplete="off"></div>
+            <div class="field"><label>超时(秒)</label><input id="relay-timeout" type="number" min="10"></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn small" id="btn-test-relay">检查识别引擎</button>
+            <span class="status muted" id="st-relay"></span>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <h3>飞书回填</h3>
+          <p class="sub">机器人凭证与目标表链接。机器人需已被加为该表协作者且有编辑权限。</p>
+          <div class="grid2">
+            <div class="field"><label>机器人 ID(app_id)</label><input id="fs-appid" placeholder="cli_..."></div>
+            <div class="field"><label>机器人密钥(app_secret,留空则不修改)</label><input id="fs-secret" type="password" autocomplete="off"></div>
+            <div class="field"><label>目标表链接</label><input id="fs-target" placeholder="https://...feishu.cn/wiki/..."></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn small" id="btn-test-feishu">检查飞书连接</button>
+            <span class="status muted" id="st-feishu"></span>
+          </div>
+        </section>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="btn-close-settings-2">关闭</button>
+        <button class="btn primary" id="btn-save-config">保存设置</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 写入确认弹层 -->
+  <div class="overlay" id="confirm-overlay">
+    <div class="modal confirm-modal">
+      <div class="modal-head"><h2 id="confirm-title">确认写入</h2></div>
+      <div class="modal-body" id="confirm-body"></div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="confirm-cancel">取消</button>
+        <button class="btn danger" id="confirm-ok">确认写入</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# ========================================================================
+# 媒介信息回填工具 · 配置文件
+# 使用方法:把本文件复制为 config.yaml,填好下面的内容再运行工具。
+# 注意:config.yaml 含密钥,请勿外发、勿上传到公开仓库(.gitignore 已忽略它)。
+# ========================================================================
+
+# ---------- 模型(识别截图/文本用,里程碑A)----------
+relay:
+  # relay 地址(OpenAI 兼容接口,支持视觉);换成你自己的服务地址
+  base_url: "https://your-llm-relay.example.com"
+  # 你的 relay API Key
+  api_key: "sk-你的key"
+  # 视觉模型名
+  model: "claude-sonnet-5"
+  # 单次请求超时秒数
+  timeout: 120
+
+# ---------- 飞书(回填用,里程碑B 才需要)----------
+feishu:
+  # 飞书自建应用的 App ID / App Secret(开放平台后台获取)
+  app_id: ""
+  app_secret: ""
+  # 目标飞书表格链接(回填写入的那张表,换成你自己的表即可)
+  target_url: "https://your-tenant.feishu.cn/wiki/xxxxxxxx?sheet=xxxxxx"
+
+# ---------- 输入/产出目录(相对本工具文件夹)----------
+paths:
+  input_dir: "输入"
+  output_dir: "产出"
