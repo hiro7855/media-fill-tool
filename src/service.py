@@ -11,6 +11,7 @@
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import uuid
@@ -345,6 +346,23 @@ def start_extract(activity):
     return {"job_id": job_id}
 
 
+def _archive_unit(cfg, activity, unit_name):
+    """把已识别消费掉的单元目录从 输入/<活动>/<单元> 移到
+    产出/已识别归档/<活动>/<单元>(移出输入目录,后续不再被重识别、
+    也从上传列表消失)。用 move 而非删除,可逆、不丢数据。"""
+    src = cfg.input_dir / activity / unit_name
+    act_dir = cfg.input_dir / activity
+    # 只归档真实存在的"子目录",且不能是活动目录本身(防退化情形误移整目录)
+    if not src.is_dir() or src.resolve() == act_dir.resolve():
+        return
+    dest_root = cfg.output_dir / "已识别归档" / activity
+    dest_root.mkdir(parents=True, exist_ok=True)
+    dest = dest_root / unit_name
+    if dest.exists():   # 同名单元二次出现:加时间戳后缀避免覆盖历史归档
+        dest = dest_root / f"{unit_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    shutil.move(str(src), str(dest))
+
+
 def _run_extract_job(job_id, activity):
     def cb(done, total, current, note):
         with _JOBS_LOCK:
@@ -357,16 +375,34 @@ def _run_extract_job(job_id, activity):
     try:
         cfg = _cfg()
         from run_extract import build_activity_records
-        records = build_activity_records(cfg, activity, progress_cb=cb)
-        wire = [record_to_wire(r) for r in records]
-        _save_records_file(cfg, activity, wire, applied={})  # 新识别 → 清空回填标记
+        # 消费式:只识别当前输入目录里"待处理"的单元,结果追加到已有记录之后
+        prev = _read_records_file(cfg, activity)
+        prev_records = (prev or {}).get("records", []) or []
+        consumed = []
+        new_records = build_activity_records(cfg, activity, progress_cb=cb, consumed_out=consumed)
+        new_wire = [record_to_wire(r) for r in new_records]
+        if not new_wire:
+            # 没有可识别的新单元:不动 records.json、不清 applied
+            with _JOBS_LOCK:
+                j = JOBS.get(job_id)
+                if j:
+                    j["status"] = "done"
+                    j["n_records"] = len(prev_records)
+                    j["logs"].append("[!] 没有可识别的新单元(可能已全部识别过,或未上传新内容)。")
+            return
+        all_wire = prev_records + new_wire
+        _save_records_file(cfg, activity, all_wire, applied={})  # 新识别 → 清空回填标记
+        # 先落库、后搬文件:即使这一步崩了,记录也已保存,不会丢数据
+        for name in consumed:
+            try:
+                _archive_unit(cfg, activity, name)
+            except OSError:
+                pass  # 归档失败不影响已保存的识别结果
         with _JOBS_LOCK:
             j = JOBS.get(job_id)
             if j:
                 j["status"] = "done"
-                j["n_records"] = len(wire)
-                if not wire:
-                    j["logs"].append("[!] 没有成功识别到任何记录。")
+                j["n_records"] = len(all_wire)
     except Exception as e:  # noqa: BLE001 后台线程,任何异常都要落到 job 状态
         with _JOBS_LOCK:
             j = JOBS.get(job_id)

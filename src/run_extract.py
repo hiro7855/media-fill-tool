@@ -16,6 +16,12 @@ from config import ConfigError, load_config, mask_secret  # noqa: E402
 from llm_client import LLMClient, RelayError  # noqa: E402
 
 
+def _is_auto_unit(name):
+    """单个模式自动命名(单个-<时间戳>)与空白占位「默认」不当作媒体名。"""
+    n = (name or "").strip()
+    return n == "默认" or n.startswith("单个-")
+
+
 def _make_test_image():
     """生成一张带已知文字的测试图,用于冒烟测试视觉链路。"""
     from PIL import Image, ImageDraw
@@ -71,11 +77,13 @@ def selfcheck(cfg):
     return 0
 
 
-def build_activity_records(cfg, activity, progress_cb=None):
+def build_activity_records(cfg, activity, progress_cb=None, consumed_out=None):
     """对一个活动目录做识别,返回复核记录列表(每条已带 errors)。
 
     progress_cb(done, total, current, note) 可选:每处理完一个单元回调一次,
     供网页显示进度/日志;note 为该单元的中文摘要或错误信息。
+    consumed_out 可选:传入一个 list,则把"成功处理完(未报错)"的单元名依次
+    追加进去,供调用方归档这些已消费的单元(识别失败的单元不会被加入)。
     """
     from extract import build_records, extract_unit, gather_person_units
     from llm_client import LLMClient, RelayError
@@ -102,8 +110,14 @@ def build_activity_records(cfg, activity, progress_cb=None):
             continue
         recs = build_records(parsed, u.name)
         for r in recs:
+            # 单元即媒体:内容没标注「媒体名称:」时,拿单元名当媒体名,
+            # 好让复核卡片按单元分组(跳过单个模式自动名/空白占位)。
+            if not (r["row"].get("媒体名称") or "").strip() and not _is_auto_unit(u.name):
+                r["row"]["媒体名称"] = u.name
             r["errors"] = validate_row(r["row"])
         records.extend(recs)
+        if consumed_out is not None:
+            consumed_out.append(u.name)   # 成功处理完 → 该单元可归档消费
         if progress_cb:
             n_person = sum(1 for r in recs if r.get("kind") != "trip")
             n_trip = sum(1 for r in recs if r.get("kind") == "trip")

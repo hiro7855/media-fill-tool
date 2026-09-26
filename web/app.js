@@ -6,8 +6,36 @@ const LEG_FIELDS = ["方式", "日期", "出发城市", "到达城市", "航班�
 const LEGS = ["去程", "返程"];
 const COLS = [...MEDIA, ...LEGS.flatMap(l => LEG_FIELDS.map(f => `${l}-${f}`))];
 
+// 单行核对里每列的相对宽度权重(短字段更窄、长字段更宽);未列出的按 1
+const FIELD_W = {
+  "媒体名称": 1.15, "姓名": 0.62, "职位": 0.82, "电话": 1.0,
+  "身份证号": 1.5, "收款方式": 0.8, "收款账号": 1.5, "开户行": 1.35,
+  "方式": 0.62, "日期": 1.0, "出发城市": 0.78, "到达城市": 0.78,
+  "航班车次": 0.95, "出发时间": 0.85, "到达时间": 0.85, "航站楼": 0.9,
+};
+const gcols = fields => fields.map(f => `minmax(0,${FIELD_W[f] || 1}fr)`).join(" ");
+
 const state = { activity: null, records: [], applied: {}, step: 1, hasFiles: false, lastPreview: null };
 let pollTimer = null;
+
+// 每条记录保存/加载时的行快照(用于判断"是否被改过"→控制保存按钮亮灭)
+const baselines = new WeakMap();
+function snapshotBaseline() { state.records.forEach(r => baselines.set(r, JSON.stringify(r.row || {}))); }
+function recDirty(rec) { return baselines.get(rec) !== JSON.stringify(rec.row || {}); }
+// 某张卡是否有改动:看卡内所有输入框对应的记录
+function cardDirty(cardEl) {
+  const idxs = new Set(qa("input[data-idx]", cardEl).map(i => +i.dataset.idx));
+  return [...idxs].some(i => state.records[i] && recDirty(state.records[i]));
+}
+// 依据"是否改过"刷新所有保存按钮:改过=蓝色可点,没改=灰色禁用
+function refreshDirty() {
+  qa("#person-cards .media-card").forEach(card => {
+    const btn = card.querySelector(".mc-save");
+    if (btn) btn.disabled = !cardDirty(card);
+  });
+  const tb = q("#btn-save-trips");
+  if (tb) tb.disabled = !state.records.some(r => r.kind === "trip" && recDirty(r));
+}
 
 const q = (sel, root = document) => root.querySelector(sel);
 const qa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -233,7 +261,16 @@ function selectActivity(name) {
   q("#preview-card").style.display = "none";
   const pw = q("#progress-wrap");
   if (pw) pw.style.display = "none";
-  ["#st-upload", "#st-extract", "#st-records", "#st-apply", "#st-write"].forEach(s => setStatus(s, ""));
+  ["#st-upload", "#st-extract", "#st-apply", "#st-write"].forEach(s => setStatus(s, ""));
+  // 切活动:回到单个模式,收起批量浮层
+  const bo = q("#batch-overlay");
+  if (bo) bo.classList.remove("show");
+  const comp = q("#composer");
+  if (comp && comp.classList.contains("batch")) {
+    q("#composer-host-single").appendChild(comp);
+    comp.classList.remove("batch");
+  }
+  if (typeof clearPaste === "function") clearPaste();
 }
 
 async function loadFiles() {
@@ -245,6 +282,7 @@ async function loadFiles() {
     const names = Object.keys(units);
     state.hasFiles = names.some(u => (units[u] || []).length);
     renderNav();
+    updateExtractEnabled();
     if (!names.length) { box.innerHTML = '<div class="hint" style="margin-top:12px">还没有文件。</div>'; return; }
     box.innerHTML = names.map(u =>
       `<div class="file-unit"><div class="u">${escapeHtml(u)}</div><div class="fs">${units[u].map(escapeHtml).join("、") || "(空)"}</div></div>`
@@ -252,30 +290,219 @@ async function loadFiles() {
   } catch (e) { /* 忽略 */ }
 }
 
-// 上传:点击 + 拖拽
-const dz = q("#dropzone");
-const fileInput = q("#file-input");
-dz.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => { if (fileInput.files.length) uploadFiles(fileInput.files); fileInput.value = ""; });
-["dragover", "dragenter"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("drag"); }));
-["dragleave", "drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("drag"); }));
-dz.addEventListener("drop", e => { if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); });
+// 上传由下方「聊天框」统一处理(拖拽 / 粘贴 / 选择文件 都进待添加,点「添加到单元」上传)
 
-async function uploadFiles(fileList) {
+async function uploadFiles(fileList, opts = {}) {
   if (!state.activity) { toast("请先选择活动", "err"); return; }
+  const statusSel = opts.statusSel || "#st-upload";
+  const unitEl = q("#unit-name");
+  const unit = opts.unit != null ? opts.unit : (unitEl ? unitEl.value.trim() : "");
   const fd = new FormData();
-  fd.append("unit", q("#unit-name").value.trim());
+  fd.append("unit", unit);
   Array.from(fileList).forEach(f => fd.append("files", f));
-  setStatus("#st-upload", "上传中…", "muted");
+  setStatus(statusSel, "上传中…", "muted");
   try {
     const r = await api("POST", `/api/activities/${enc(state.activity)}/upload`, fd, true);
     const okN = r.saved.length, skN = r.skipped.length;
     let msg = `已上传 ${okN} 个到单元「${r.unit}」`;
     if (skN) msg += `,跳过 ${skN} 个:` + r.skipped.map(s => `${s.name}(${s.reason})`).join("、");
-    setStatus("#st-upload", msg, skN ? "err" : "ok");
+    setStatus(statusSel, msg, skN ? "err" : "ok");
     loadFiles();
-  } catch (e) { setStatus("#st-upload", e.message, "err"); }
+    return r;
+  } catch (e) { setStatus(statusSel, e.message, "err"); return null; }
 }
+
+// ---- 聊天框:文字 + 图片 + 文件 一起攒,点「添加到单元」统一上传 ----
+let pendingFiles = [];   // [{ file, url, isImage, generated, name }]
+let pasteSeq = 0;
+
+function mimeExt(m) {
+  m = (m || "").toLowerCase();
+  if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("gif")) return "gif";
+  if (m.includes("bmp")) return "bmp";
+  return "png";
+}
+
+function stampName() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  const s = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `${s}-${++pasteSeq}`;
+}
+
+function renderPending() {
+  const box = q("#paste-thumbs");
+  box.innerHTML = pendingFiles.map((it, i) => it.isImage
+    ? `<div class="pthumb"><img src="${it.url}" alt="待添加截图"><button class="pthumb-x" data-i="${i}" title="移除" aria-label="移除">×</button></div>`
+    : `<div class="pfile"><span class="pfile-ic">📄</span><span class="pfile-nm">${escapeHtml(it.name)}</span><button class="pthumb-x pfile-x" data-i="${i}" title="移除" aria-label="移除">×</button></div>`
+  ).join("");
+  qa("#paste-thumbs .pthumb-x").forEach(b => b.addEventListener("click", () => {
+    const i = +b.dataset.i;
+    if (pendingFiles[i]) {
+      if (pendingFiles[i].url) URL.revokeObjectURL(pendingFiles[i].url);
+      pendingFiles.splice(i, 1);
+      renderPending();
+    }
+  }));
+  updateExtractEnabled();
+}
+
+function addPendingFiles(fileList, fromPaste) {
+  Array.from(fileList).forEach(f => {
+    const isImage = (f.type || "").startsWith("image/");
+    pendingFiles.push({
+      file: f,
+      isImage,
+      generated: !!fromPaste,                 // 粘贴的图片上传时生成唯一名;拖拽/选择的保留原文件名
+      name: f.name || (isImage ? "截图.png" : "文件"),
+      url: isImage ? URL.createObjectURL(f) : null,
+    });
+  });
+  renderPending();
+}
+
+function clearPaste() {
+  const pb = q("#paste-box");
+  if (pb) pb.value = "";
+  pendingFiles.forEach(it => { if (it.url) URL.revokeObjectURL(it.url); });
+  pendingFiles = [];
+  renderPending();
+}
+
+// 把聊天框里的文字+图片+文件打包成待上传的 File[](粘贴的生成唯一名,拖拽/选择的保留原名)
+function buildComposerFiles(stamp) {
+  const pb = q("#paste-box");
+  const text = pb ? (pb.value || "").trim() : "";
+  const files = [];
+  if (text) files.push(new File([text], `粘贴文本-${stamp}.txt`, { type: "text/plain" }));
+  let imgIdx = 0;
+  pendingFiles.forEach(pf => {
+    if (pf.generated) {
+      imgIdx += 1;
+      files.push(new File([pf.file], `粘贴图片-${stamp}-${imgIdx}.${mimeExt(pf.file.type)}`, { type: pf.file.type || "image/png" }));
+    } else {
+      files.push(pf.file);   // 拖拽 / 选择:保留原文件名(与旧拖拽上传一致)
+    }
+  });
+  return files;
+}
+
+// 聊天框里是否有内容(文字或待添加的图片/文件)
+function composerHasContent() {
+  const pb = q("#paste-box");
+  return !!(pb && (pb.value || "").trim()) || pendingFiles.length > 0;
+}
+
+// 「开始识别」的亮/灭:聊天框有内容,或已有攒好的单元文件,才可点
+function updateExtractEnabled() {
+  const btn = q("#btn-extract");
+  if (btn) btn.disabled = !(composerHasContent() || state.hasFiles);
+}
+
+// 批量浮层:点「添加到单元」把当前框内容存成一个单元(单元名取 #unit-name)
+async function addPasted() {
+  if (!state.activity) { toast("请先在①「选活动」里选择活动", "err"); return; }
+  if (!composerHasContent()) { toast("先粘贴/拖入文字、图片或文件", "err"); return; }
+  const files = buildComposerFiles(stampName());
+  const r = await uploadFiles(files);
+  if (r && r.saved.length) clearPaste();
+}
+
+// 单个模式:把聊天框内容作为一个独立单元上传,状态写进「开始识别」旁,成功后清空
+async function uploadComposerAsUnit() {
+  const stamp = stampName();
+  const files = buildComposerFiles(stamp);
+  const r = await uploadFiles(files, { unit: `单个-${stamp}`, statusSel: "#st-extract" });
+  if (r && r.saved.length) { clearPaste(); return true; }
+  return false;
+}
+
+(() => {
+  const pb = q("#paste-box");
+  const composer = q("#composer");
+  const fi = q("#file-input");
+  if (!pb || !composer) return;
+
+  // 粘贴:图片进待添加,文字进文本框
+  pb.addEventListener("paste", e => {
+    const cd = e.clipboardData;
+    if (!cd) return;
+    const imgs = [];
+    if (cd.items) {
+      for (const it of cd.items) {
+        if (it.kind === "file" && it.type && it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) imgs.push(f);
+        }
+      }
+    }
+    if (!imgs.length && cd.files && cd.files.length) {
+      for (const f of cd.files) if (f.type && f.type.startsWith("image/")) imgs.push(f);
+    }
+    if (imgs.length) {
+      e.preventDefault();
+      addPendingFiles(imgs, true);
+      const t = cd.getData("text/plain");
+      if (t) {
+        const s = pb.selectionStart, en = pb.selectionEnd;
+        pb.value = pb.value.slice(0, s) + t + pb.value.slice(en);
+        const pos = s + t.length;
+        pb.setSelectionRange(pos, pos);
+      }
+    }
+    // 纯文字:不拦截,走默认粘贴进 textarea
+  });
+
+  // 拖拽:整个聊天框都是投放区
+  ["dragover", "dragenter"].forEach(ev => composer.addEventListener(ev, e => { e.preventDefault(); composer.classList.add("drag"); }));
+  ["dragleave", "dragend"].forEach(ev => composer.addEventListener(ev, e => { if (e.target === composer) composer.classList.remove("drag"); }));
+  composer.addEventListener("drop", e => {
+    e.preventDefault();
+    composer.classList.remove("drag");
+    if (e.dataTransfer && e.dataTransfer.files.length) addPendingFiles(e.dataTransfer.files, false);
+  });
+
+  // 选择文件
+  q("#btn-pick-file").addEventListener("click", () => fi.click());
+  fi.addEventListener("change", () => { if (fi.files.length) addPendingFiles(fi.files, false); fi.value = ""; });
+
+  // 快捷键 + 按钮
+  pb.addEventListener("input", updateExtractEnabled);
+  pb.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      // 批量浮层里 → 添加到单元;单个模式 → 直接开始识别
+      if (composer.classList.contains("batch")) addPasted();
+      else startExtract();
+    }
+  });
+  q("#btn-paste-add").addEventListener("click", addPasted);
+  q("#btn-paste-clear").addEventListener("click", clearPaste);
+})();
+
+// ---- 批量上传浮层:把同一个聊天框移进/移出弹层,攒多位媒体 ----
+function openBatch() {
+  if (!state.activity) { toast("请先在①「选活动」里选择活动", "err"); return; }
+  const comp = q("#composer");
+  q("#composer-host-batch").appendChild(comp);   // 复用同一个框,监听器随节点保留
+  comp.classList.add("batch");
+  setStatus("#st-upload", "");
+  q("#batch-overlay").classList.add("show");
+  loadFiles();
+}
+function closeBatch() {
+  const comp = q("#composer");
+  q("#composer-host-single").appendChild(comp);  // 归位到主卡
+  comp.classList.remove("batch");
+  q("#batch-overlay").classList.remove("show");
+  clearPaste();
+}
+q("#btn-open-batch").addEventListener("click", openBatch);
+q("#btn-close-batch").addEventListener("click", closeBatch);
+q("#btn-batch-done").addEventListener("click", closeBatch);
+q("#batch-overlay").addEventListener("click", e => { if (e.target.id === "batch-overlay") closeBatch(); });
 
 // ================= ③ 识别 =================
 q("#btn-extract").addEventListener("click", startExtract);
@@ -283,16 +510,23 @@ q("#btn-reload-records").addEventListener("click", () => loadRecords(false));
 
 async function startExtract() {
   if (!state.activity) { toast("请先在①「选活动」里选择活动", "err"); return; }
+  const hasComposer = composerHasContent();
+  if (!hasComposer && !state.hasFiles) { toast("请先粘贴或上传这位媒体的资料", "err"); return; }
+  q("#btn-extract").disabled = true;
   try {
+    // 单个模式:聊天框里有内容 → 先存成一个单元,再识别
+    if (hasComposer) {
+      const ok = await uploadComposerAsUnit();
+      if (!ok) { updateExtractEnabled(); return; }   // 上传失败,别继续识别
+    }
     q("#progress-wrap").style.display = "block";
     q("#extract-log").textContent = "";
     setBar(0, "启动中…");
     setStatus("#st-extract", "识别进行中…", "muted");
-    q("#btn-extract").disabled = true;
     const { job_id } = await api("POST", `/api/activities/${enc(state.activity)}/extract`);
     pollJob(job_id);
   } catch (e) {
-    q("#btn-extract").disabled = false;
+    updateExtractEnabled();
     setStatus("#st-extract", e.message, "err");
   }
 }
@@ -314,18 +548,19 @@ function pollJob(jobId) {
       q("#extract-log").scrollTop = q("#extract-log").scrollHeight;
       if (j.status === "done" || j.status === "error") {
         clearInterval(pollTimer);
-        q("#btn-extract").disabled = false;
+        updateExtractEnabled();
         if (j.status === "done") {
           setBar(100, `识别完成:共 ${j.n_records} 条记录`);
           setStatus("#st-extract", "识别完成,请在下方核对", "ok");
           loadRecords(false);
+          loadFiles();   // 消费式:已识别的单元被归档,刷新上传列表→清空、按钮变灰
         } else {
           setStatus("#st-extract", "识别失败:" + (j.error || ""), "err");
         }
       }
     } catch (e) {
       clearInterval(pollTimer);
-      q("#btn-extract").disabled = false;
+      updateExtractEnabled();
       setStatus("#st-extract", e.message, "err");
     }
   }, 1000);
@@ -337,6 +572,7 @@ async function loadRecords(silent) {
     const data = await api("GET", `/api/activities/${enc(state.activity)}/records`);
     state.records = data.records || [];
     state.applied = data.applied || {};
+    snapshotBaseline();
     renderNav();
     if (!state.records.length) {
       q("#review-card").style.display = silent ? "none" : "block";
@@ -365,13 +601,14 @@ function computeIssues() {
     uncCells += (r.uncertain || []).filter(c => !errs[c]).length;
   });
   const unassigned = trips.filter(t => !(t.row && (t.row["姓名"] || "").trim())).length;
-  return { nPersons: persons.length, errCells, uncCells, nTrips: trips.length, unassigned };
+  const nMedia = new Set(persons.map(r => (r.row && r.row["媒体名称"] || "").trim() || "\u0000__none__")).size;
+  return { nMedia, nPersons: persons.length, errCells, uncCells, nTrips: trips.length, unassigned };
 }
 
 function renderIssueBar() {
   const it = computeIssues();
   const bar = q("#issue-bar");
-  let html = `<span class="stat">共 <b>${it.nPersons}</b> 人</span>`;
+  let html = `<span class="stat">共 <b>${it.nMedia}</b> 家媒体 · <b>${it.nPersons}</b> 人</span>`;
   if (it.errCells) html += `<span class="stat red">待修正 <b>${it.errCells}</b> 处</span>`;
   if (it.uncCells) html += `<span class="stat yellow">待核对 <b>${it.uncCells}</b> 处</span>`;
   if (it.unassigned) html += `<span class="stat">行程待认领 <b>${it.unassigned}</b> 段</span>`;
@@ -383,7 +620,7 @@ function renderIssueBar() {
   bar.innerHTML = html;
   const jb = q("#jump-err");
   if (jb) jb.addEventListener("click", () => {
-    const card = q(".person-card.has-err") || q(".trip-card");
+    const card = q(".person.has-err") || q(".media-card.has-err") || q(".trip-card");
     if (card) { card.scrollIntoView({ behavior: "smooth", block: "start" }); card.classList.add("flash"); }
   });
 }
@@ -404,31 +641,66 @@ function renderPersonCards() {
   const persons = state.records.filter(r => r.kind !== "trip");
   const box = q("#person-cards");
   if (!persons.length) { box.innerHTML = '<div class="empty">没有出席人记录。</div>'; return; }
-  box.innerHTML = persons.map((rec, i) => {
-    const idx = state.records.indexOf(rec);
-    const nErr = Object.keys(rec.errors || {}).length;
-    const nUnc = (rec.uncertain || []).filter(c => !(rec.errors || {})[c]).length;
-    let chip = '<span class="chip green">✓ 无问题</span>';
-    if (nErr) chip = `<span class="chip red">待修正 ${nErr}</span>`;
-    else if (nUnc) chip = `<span class="chip yellow">待核对 ${nUnc}</span>`;
 
-    const idBlock = MEDIA.map(c => fieldHtml(rec, idx, c, c)).join("");
-    const legBlocks = LEGS.map(leg => {
-      const fields = LEG_FIELDS.map(f => fieldHtml(rec, idx, `${leg}-${f}`, f)).join("");
-      return `<div class="pc-block leg"><div class="blk-title">${leg}</div><div class="pc-fields">${fields}</div></div>`;
+  // 按媒体名称分组(保留首次出现顺序;未填媒体名称的单独归一组)
+  const groups = [];
+  const byKey = new Map();
+  persons.forEach(rec => {
+    const media = (rec.row && rec.row["媒体名称"] || "").trim();
+    const key = media || "\u0000__nomedia__";
+    if (!byKey.has(key)) { const g = { media, recs: [] }; byKey.set(key, g); groups.push(g); }
+    byKey.get(key).recs.push(rec);
+  });
+
+  box.innerHTML = groups.map(g => {
+    // 该媒体下所有人的红/黄合计,做卡头徽标
+    let gErr = 0, gUnc = 0;
+    g.recs.forEach(rec => {
+      const errs = rec.errors || {};
+      gErr += Object.keys(errs).length;
+      gUnc += (rec.uncertain || []).filter(c => !errs[c]).length;
+    });
+    let chip = '<span class="chip green">✓ 无问题</span>';
+    if (gErr) chip = `<span class="chip red">待修正 ${gErr}</span>`;
+    else if (gUnc) chip = `<span class="chip yellow">待核对 ${gUnc}</span>`;
+
+    const people = g.recs.map((rec, i) => {
+      const idx = state.records.indexOf(rec);
+      const nErr = Object.keys(rec.errors || {}).length;
+      const idRow = MEDIA.map(c => fieldHtml(rec, idx, c, c)).join("");
+      const legRows = LEGS.map(leg => {
+        const fields = LEG_FIELDS.map(f => fieldHtml(rec, idx, `${leg}-${f}`, f)).join("");
+        return `<div class="pc-row leg">
+          <div class="row-title">${leg}</div>
+          <div class="pc-line" style="grid-template-columns:${gcols(LEG_FIELDS)}">${fields}</div>
+        </div>`;
+      }).join("");
+      return `<div class="person${nErr ? " has-err" : ""}">
+        <div class="p-name">${escapeHtml(personName(rec, i))}${rec.source ? `<span class="p-src">来源:${escapeHtml(rec.source)}</span>` : ""}</div>
+        <div class="pc-row">
+          <div class="row-title id">身份信息</div>
+          <div class="pc-line" style="grid-template-columns:${gcols(MEDIA)}">${idRow}</div>
+        </div>
+        ${legRows}
+      </div>`;
     }).join("");
 
-    return `<div class="person-card${nErr ? " has-err" : ""}">
-      <div class="pc-head">
-        <span class="pc-name">${escapeHtml(personName(rec, i))}</span>
-        ${rec.source ? `<span class="pc-src">来源:${escapeHtml(rec.source)}</span>` : ""}
+    const mediaName = g.media || "(未填媒体名称)";
+    return `<div class="media-card${gErr ? " has-err" : ""}">
+      <div class="mc-head">
+        <span class="mc-name">${escapeHtml(mediaName)}</span>
+        <span class="mc-count">${g.recs.length} 人</span>
         ${chip}
+        <span class="mc-actions">
+          <span class="status muted"></span>
+          <button class="btn primary small mc-save" disabled>保存修改</button>
+        </span>
       </div>
-      <div class="pc-block"><div class="blk-title">身份信息</div><div class="pc-fields">${idBlock}</div></div>
-      ${legBlocks}
+      ${people}
     </div>`;
   }).join("");
   qa("#person-cards input").forEach(inp => inp.addEventListener("input", onCellEdit));
+  qa("#person-cards .mc-save").forEach(btn => btn.addEventListener("click", () => saveRecords(btn)));
 }
 
 function renderTripCards() {
@@ -489,11 +761,13 @@ function onTripAssign(e) {
     manual.style.display = "none";
     rec.row["姓名"] = sel.value;
   }
+  refreshDirty();
 }
 function onTripManual(e) {
   const idx = +e.target.dataset.idx;
   const rec = state.records[idx];
   if (rec) rec.row["姓名"] = e.target.value.trim();
+  refreshDirty();
 }
 
 function renderReview() {
@@ -506,6 +780,7 @@ function renderReview() {
   renderIssueBar();
   renderPersonCards();
   renderTripCards();
+  refreshDirty();
 }
 
 function onCellEdit(e) {
@@ -523,21 +798,39 @@ function onCellEdit(e) {
     const why = fld.querySelector(".why");
     if (why) why.textContent = "";
   }
+  refreshDirty();
 }
 
-q("#btn-save-records").addEventListener("click", async () => {
+// 就地设置某个状态元素(保留其标记 class,只切换 ok/err/muted)
+function setStatusEl(el, msg, kind = "muted") {
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.remove("ok", "err", "muted");
+  el.classList.add(kind);
+}
+
+// 保存全部记录(每张卡/待认领块的保存按钮共用:所有编辑都在 state.records 里,
+// 后端 PUT 整表覆盖并重算红黄,故任一按钮点下都会持久化当前所有改动)
+async function saveRecords(btn) {
   if (!state.activity) return;
-  setStatus("#st-records", "保存中…", "muted");
+  const st = btn && btn.parentElement ? btn.parentElement.querySelector(".status") : null;
+  setStatusEl(st, "保存中…", "muted");
+  if (btn) btn.disabled = true;
   try {
     const data = await api("PUT", `/api/activities/${enc(state.activity)}/records`, { records: state.records });
     state.records = data.records || [];
-    renderReview();
+    snapshotBaseline();
     const it = computeIssues();
-    if (it.errCells) setStatus("#st-records", `已保存,还有 ${it.errCells} 处待修正`, "err");
-    else setStatus("#st-records", "已保存,红黄标记已刷新", "ok");
-    toast("已保存", "ok");
-  } catch (e) { setStatus("#st-records", e.message, "err"); }
-});
+    renderReview();   // 重画:红黄标记随服务端重算刷新(会重建卡片与按钮,并回到"未改动=灰"态)
+    toast(it.errCells ? `已保存,还有 ${it.errCells} 处待修正` : "已保存,红黄标记已刷新", it.errCells ? "err" : "ok");
+  } catch (e) {
+    setStatusEl(st, e.message, "err");
+    if (btn) btn.disabled = false;
+  }
+}
+
+const btnSaveTrips = q("#btn-save-trips");
+if (btnSaveTrips) btnSaveTrips.addEventListener("click", () => saveRecords(btnSaveTrips));
 
 // ================= ④ 回填 =================
 q("#btn-preview").addEventListener("click", async () => {
@@ -637,7 +930,11 @@ q("#btn-write").addEventListener("click", async () => {
 
 // ================= 启动 =================
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") { closeSettings(); q("#confirm-overlay").classList.remove("show"); }
+  if (e.key === "Escape") {
+    closeSettings();
+    q("#confirm-overlay").classList.remove("show");
+    if (q("#batch-overlay").classList.contains("show")) closeBatch();
+  }
 });
 updateBadge();
 goStep(1);

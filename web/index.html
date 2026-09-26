@@ -55,25 +55,30 @@
       <div class="empty-guard" data-guard="2"></div>
       <div class="step-body" data-body="2">
         <div class="card">
-          <h2>上传资料</h2>
-          <p class="sub">把某位嘉宾的微信文本(.txt)和截图放到同一个「单元」里;一人一个单元,识别更准。</p>
-          <div class="field" style="max-width:320px"><label>单元名称(通常填这个人的名字)</label><input id="unit-name" placeholder="默认"></div>
-          <div class="dropzone" id="dropzone">
-            把文件拖到这里,或点击选择<br>
-            <span class="hint">支持 .txt / .md 文本,.png / .jpg / .jpeg / .webp 截图,单个 ≤20MB</span>
+          <div class="card-head">
+            <h2>上传资料</h2>
+            <button class="btn small" id="btn-open-batch">批量上传</button>
+          </div>
+          <p class="sub">把这位媒体老师的微信文字和截图直接粘进来,贴完点右下「开始识别」。想一次处理多位媒体,用右上角「批量上传」。</p>
+
+          <div id="composer-host-single">
+            <div class="composer" id="composer">
+              <textarea id="paste-box" class="composer-input" placeholder="把微信里的文字或截图直接粘到这里(⌘/Ctrl+V);也可以把 .txt / .md、截图文件拖进来,或点下方「选择文件」。可只贴文字、只贴图,也可混着贴。"></textarea>
+              <div class="paste-thumbs" id="paste-thumbs"></div>
+              <div class="composer-foot">
+                <button class="btn primary small" id="btn-paste-add">添加到单元</button>
+                <button class="btn ghost small" id="btn-paste-clear">清空</button>
+                <button class="btn ghost small" id="btn-pick-file" type="button">选择文件</button>
+                <span class="hint" style="margin-left:auto">拖拽 / 粘贴 / 选择均可 · 单个 ≤20MB</span>
+              </div>
+            </div>
           </div>
           <input type="file" id="file-input" multiple accept=".txt,.md,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
-          <span class="status muted" id="st-upload"></span>
-          <div class="file-units" id="file-units"></div>
-        </div>
 
-        <div class="card">
-          <h2>识别与核对</h2>
-          <p class="sub">对当前活动的资料做识别,识别完在下面按人核对红黄标记。</p>
-          <div class="btn-row" style="margin-top:0">
-            <button class="btn primary" id="btn-extract">开始识别</button>
-            <button class="btn small" id="btn-reload-records">刷新结果</button>
+          <div class="upload-actions">
             <span class="status muted" id="st-extract"></span>
+            <button class="btn small" id="btn-reload-records">刷新结果</button>
+            <button class="btn primary" id="btn-extract" disabled>开始识别</button>
           </div>
           <div class="progress-wrap" id="progress-wrap" style="display:none">
             <div class="progress"><div class="bar" id="progress-bar"></div></div>
@@ -94,14 +99,15 @@
           <div id="person-cards"></div>
 
           <div id="trips-block" style="display:none">
-            <h3 class="section-title" style="margin-top:24px">待认领行程</h3>
+            <div class="trips-head">
+              <h3 class="section-title">待认领行程</h3>
+              <span class="tp-actions">
+                <span class="status muted"></span>
+                <button class="btn primary small" id="btn-save-trips" disabled>保存认领</button>
+              </span>
+            </div>
             <p class="sub">每张卡是一段还没配上人的行程,请用下拉把它认领给上面某位嘉宾。</p>
             <div id="trip-cards"></div>
-          </div>
-
-          <div class="btn-row">
-            <button class="btn primary" id="btn-save-records">保存修改</button>
-            <span class="status muted" id="st-records"></span>
           </div>
         </div>
       </div>
@@ -195,6 +201,26 @@
       <div class="modal-foot">
         <button class="btn ghost" id="confirm-cancel">取消</button>
         <button class="btn danger" id="confirm-ok">确认写入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 批量上传浮层:一位媒体一个单元,攒齐后回上一页统一识别 -->
+  <div class="overlay" id="batch-overlay">
+    <div class="modal batch-modal">
+      <div class="modal-head">
+        <h2>批量上传多位媒体</h2>
+        <button class="modal-close" id="btn-close-batch" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="sub">一家媒体 = 一个「单元」:填媒体名 → 把这家媒体记者的微信文字和截图粘/拖进下面的框 → 点「添加到单元」。多家重复此步;全部加完点右下「完成」,回到上一页点「开始识别」一次识别所有人。</p>
+        <div class="field"><label>媒体名称(这个单元属于哪家媒体)</label><input id="unit-name" placeholder="如:宇哥、老张财经"></div>
+        <div id="composer-host-batch"></div>
+        <span class="status muted" id="st-upload"></span>
+        <div class="file-units" id="file-units"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn primary" id="btn-batch-done">完成</button>
       </div>
     </div>
   </div>
